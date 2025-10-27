@@ -1,0 +1,415 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/EdithOroche/IA/blob/main/Laboratorio01_II_PI\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "bb3a37d8",
+      "metadata": {
+        "id": "bb3a37d8"
+      },
+      "source": [
+        "# Convolución 2D (imágenes RGB de 3 canales)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "76e964cf",
+      "metadata": {
+        "id": "76e964cf"
+      },
+      "source": [
+        "\n",
+        "## 1. Convulsión 2D: notación y dimensiones\n",
+        "\n",
+        "Usaremos la notación estándar de *deep learning* (PyTorch):\n",
+        "\n",
+        "- Entrada: un *batch* de imágenes con forma **`(N, C_in, H_in, W_in)`**.\n",
+        "  - `N`: tamaño de lote.\n",
+        "  - `C_in`: canales de entrada. Para imágenes RGB, `C_in = 3`.\n",
+        "  - `H_in`, `W_in`: alto y ancho de la imagen.\n",
+        "- Filtros (pesos): **`(C_out, C_in, K_h, K_w)`**.\n",
+        "  - `C_out`: número de mapas de salida (canales de salida).\n",
+        "  - `K_h`, `K_w`: alto y ancho del *kernel* (filtro).\n",
+        "- Hiperparámetros:\n",
+        "  - *Padding*: `P_h`, `P_w` (número de ceros que se “agregan” en los bordes alto y ancho).\n",
+        "  - *Stride*: `S_h`, `S_w` (desplazamiento del filtro vertical y horizontal).\n",
+        "  - *(Opcional)* **Dilatación**: `D_h`, `D_w` (aumenta el “salto” entre posiciones del *kernel*). Aquí la consideraremos **1** para centrarnos en lo pedido.\n",
+        "\n",
+        "> En PyTorch, la **convolución 2D** estándar mezcla los `C_in` canales de entrada con cada filtro (que también tiene `C_in` canales) y produce `C_out` mapas. El tamaño espacial de cada mapa está dado por las fórmulas de abajo.\n",
+        "\n",
+        "---\n",
+        "\n",
+        "## 2. Fórmula del tamaño de salida (sin dilatación; `D_h = D_w = 1`)\n",
+        "\n",
+        "Para una **convolución 2D** con *padding* `(P_h, P_w)`, *stride* `(S_h, S_w)` y *kernel* `(K_h, K_w)`, el tamaño espacial de la salida es:\n",
+        "\n",
+        "$$\n",
+        "H_{\\text{out}} = \\left\\lfloor \\frac{H_{\\text{in}} + 2P_h - K_h}{S_h} \\right\\rfloor + 1,\\qquad\n",
+        "W_{\\text{out}} = \\left\\lfloor \\frac{W_{\\text{in}} + 2P_w - K_w}{S_w} \\right\\rfloor + 1.\n",
+        "$$\n",
+        "\n",
+        "Y el **número de canales de salida** es `C_out`. Por lo tanto, la forma final es:\n",
+        "\n",
+        "$$\n",
+        "(N,\\; C_{\\text{out}},\\; H_{\\text{out}},\\; W_{\\text{out}}).\n",
+        "$$\n",
+        "\n",
+        "**Condiciones de validez** (para que \\(H_{\\text{out}}, W_{\\text{out}}\\) sean positivos):\n",
+        "$$\n",
+        "H_{\\text{in}} + 2P_h - K_h \\ge 0,\\qquad W_{\\text{in}} + 2P_w - K_w \\ge 0.\n",
+        "$$\n",
+        "\n",
+        "Si la división no es exacta, PyTorch usa el **piso** (*floor*).\n",
+        "\n",
+        "---\n",
+        "\n",
+        "## 3. ¿Qué hace *Padding* y *Stride*?\n",
+        "\n",
+        "- **Padding** “amplía” virtualmente la imagen con ceros en los bordes para permitir más posiciones del *kernel*. A mayor `P_h`/`P_w`, mayor $H_{\\text{out}}, W_{\\text{out}}$ (hasta cierto punto).\n",
+        "- **Stride** controla cuánto se “salta” al mover el *kernel*. A mayor `S_h`/`S_w`, **menor** $H_{\\text{out}}, W_{\\text{out}}$.\n",
+        "\n",
+        "Casos comunes:\n",
+        "- **`padding='valid'`** (o `P_h=P_w=0`): no hay ceros añadidos. $\\Rightarrow$ salida “más pequeña”.\n",
+        "- **`padding='same'`** (PyTorch lo soporta desde v2.0 en adelante para `Conv2d`): el *framework* elige `P_h,P_w` para que, con `S=1`, se cumpla $H_{\\text{out}}=H_{\\text{in}}$ y $W_{\\text{out}}=W_{\\text{in}}$ (o lo más cercano posible con *floor*).\n",
+        "\n",
+        "---\n",
+        "\n",
+        "## 4. Convolución con **3 canales de entrada**\n",
+        "\n",
+        "Para una imagen RGB $C_{\\text{in}}=3$:\n",
+        "- Cada filtro tiene forma $(C_{\\text{in}}=3,\\; K_h,\\; K_w)$.\n",
+        "- El resultado agrega las contribuciones de los 3 canales (con sus pesos respectivos) y produce un mapa. Con `C_out` filtros distintos, se obtienen `C_out` mapas.\n",
+        "\n",
+        "**Importante:** El tamaño espacial $(H_{\\text{out}}, W_{\\text{out}})$ **no depende** de `C_in`, sino de $(H_{\\text{in}}, W_{\\text{in}})$, $(K_h, K_w)$, $(P_h, P_w)$ y $(S_h, S_w)$. `C_in` y `C_out` solo afectan la **profundidad** (canales) y el número de filtros/aprendizaje de parámetros.\n",
+        "\n",
+        "---\n",
+        "\n",
+        "## 5. Extensión con **dilatación** (referencia)\n",
+        "\n",
+        "Si se usara dilatación \\((D_h, D_w)\\), la fórmula general es:\n",
+        "\n",
+        "$$\n",
+        "H_{\\text{out}} = \\left\\lfloor \\frac{H_{\\text{in}} + 2P_h - D_h\\,(K_h-1) - 1}{S_h} \\right\\rfloor + 1,\\qquad\n",
+        "W_{\\text{out}} = \\left\\lfloor \\frac{W_{\\text{in}} + 2P_w - D_w\\,(K_w-1) - 1}{S_w} \\right\\rfloor + 1.\n",
+        "$$\n",
+        "\n",
+        "En este cuaderno asumiremos $D_h=D_w=1$ (sin dilatación) para centrarnos en lo solicitado.\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "acd47d67",
+      "metadata": {
+        "id": "acd47d67"
+      },
+      "source": [
+        "\n",
+        "## 6. Experimentos en PyTorch: verificación de tamaños\n",
+        "\n",
+        "A continuación, verificaremos la teoría creando capas `nn.Conv2d` y comparando la forma calculada con la reportada por PyTorch. **Si en tu entorno no está instalado PyTorch**, estos bloques no se ejecutarán; en ese caso, puedes subir el mismo notebook a **Google Colab** o a un entorno con PyTorch preinstalado.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "011b2aee",
+      "metadata": {
+        "id": "011b2aee"
+      },
+      "outputs": [],
+      "source": [
+        "# === Setup: importaciones y utilidades ===\n",
+        "try:\n",
+        "    import torch\n",
+        "    import torch.nn as nn\n",
+        "    TORCH_OK = True\n",
+        "except Exception as e:\n",
+        "    TORCH_OK = False\n",
+        "    print(\"PyTorch no está disponible en este entorno. Puedes ejecutar este notebook en Google Colab o un entorno con PyTorch.\\nDetalle:\", e)\n",
+        "\n",
+        "import math\n",
+        "import itertools\n",
+        "import pandas as pd\n",
+        "\n",
+        "def conv2d_out_hw(H_in, W_in, K_h, K_w, P_h, P_w, S_h, S_w):\n",
+        "    \"\"\"Calcula (H_out, W_out) para conv2d sin dilatación (D=1).\"\"\"\n",
+        "    H_out = math.floor((H_in + 2*P_h - K_h)/S_h) + 1\n",
+        "    W_out = math.floor((W_in + 2*P_w - K_w)/S_w) + 1\n",
+        "    return H_out, W_out\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "0a60a830",
+      "metadata": {
+        "id": "0a60a830"
+      },
+      "source": [
+        "\n",
+        "### 6.1. Caso simple con RGB (3 canales)\n",
+        "\n",
+        "Probemos con una imagen `H_in=128, W_in=96`, `C_in=3`, un *kernel* `K=3×3`, *padding* `P=1`, *stride* `S=1`. Por teoría, con `K=3` y `P=1`, `S=1` se cumple \\(H_{out}=H_{in}\\) y \\(W_{out}=W_{in}\\).\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "2cf4e39d",
+      "metadata": {
+        "id": "2cf4e39d"
+      },
+      "outputs": [],
+      "source": [
+        "# Parámetros\n",
+        "N, C_in, H_in, W_in = 4, 3, 128, 96\n",
+        "K_h, K_w = 3, 3\n",
+        "P_h, P_w = 1, 1\n",
+        "S_h, S_w = 1, 1\n",
+        "C_out = 16\n",
+        "\n",
+        "# Cálculo teórico\n",
+        "H_out_th, W_out_th = conv2d_out_hw(H_in, W_in, K_h, K_w, P_h, P_w, S_h, S_w)\n",
+        "print(\"Teoría -> H_out, W_out:\", (H_out_th, W_out_th))\n",
+        "\n",
+        "if TORCH_OK:\n",
+        "    # Tensor de entrada\n",
+        "    x = torch.randn(N, C_in, H_in, W_in)\n",
+        "    # Capa conv2d\n",
+        "    conv = nn.Conv2d(in_channels=C_in, out_channels=C_out,\n",
+        "                     kernel_size=(K_h, K_w), stride=(S_h, S_w), padding=(P_h, P_w), bias=False)\n",
+        "    y = conv(x)\n",
+        "    print(\"PyTorch -> y.shape:\", tuple(y.shape))\n",
+        "else:\n",
+        "    print(\"PyTorch no disponible: omitiendo ejecución de Conv2d.\")\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "4fbfe89f",
+      "metadata": {
+        "id": "4fbfe89f"
+      },
+      "source": [
+        "\n",
+        "### 6.2. Rejilla de pruebas (múltiples combinaciones)\n",
+        "\n",
+        "Generaremos una tabla comparando la **forma teórica** con la **medida por PyTorch** para distintas combinaciones de `K`, `P` y `S` (manteniendo `C_in=3`), y distintos tamaños de entrada.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "cc55ff5e",
+      "metadata": {
+        "id": "cc55ff5e"
+      },
+      "outputs": [],
+      "source": [
+        "rows = []\n",
+        "Hs = [32, 33]\n",
+        "Ws = [32, 35]\n",
+        "Ks = [(1,1), (3,3), (5,5)]\n",
+        "Ps = [(0,0), (1,1), (2,2)]\n",
+        "Ss = [(1,1), (2,2), (3,3)]\n",
+        "C_in = 3\n",
+        "C_out = 8\n",
+        "N = 2\n",
+        "\n",
+        "for H_in, W_in in itertools.product(Hs, Ws):\n",
+        "    for (K_h, K_w) in Ks:\n",
+        "        for (P_h, P_w) in Ps:\n",
+        "            for (S_h, S_w) in Ss:\n",
+        "                H_out_th, W_out_th = conv2d_out_hw(H_in, W_in, K_h, K_w, P_h, P_w, S_h, S_w)\n",
+        "                pyt_shape = None\n",
+        "                ok = None\n",
+        "                err = None\n",
+        "                if TORCH_OK and H_out_th > 0 and W_out_th > 0:\n",
+        "                    try:\n",
+        "                        x = torch.randn(N, C_in, H_in, W_in)\n",
+        "                        conv = nn.Conv2d(C_in, C_out, (K_h, K_w), (S_h, S_w), (P_h, P_w), bias=False)\n",
+        "                        y = conv(x)\n",
+        "                        pyt_shape = tuple(y.shape)\n",
+        "                        ok = (pyt_shape == (N, C_out, H_out_th, W_out_th))\n",
+        "                    except Exception as e:\n",
+        "                        err = str(e)[:120]\n",
+        "                rows.append({\n",
+        "                    \"H_in\": H_in, \"W_in\": W_in,\n",
+        "                    \"K\": f\"{K_h}x{K_w}\", \"P\": f\"{P_h},{P_w}\", \"S\": f\"{S_h},{S_w}\",\n",
+        "                    \"H_out_th\": H_out_th, \"W_out_th\": W_out_th,\n",
+        "                    \"PyTorch_shape\": pyt_shape, \"Match?\": ok, \"Err\": err\n",
+        "                })\n",
+        "\n",
+        "df = pd.DataFrame(rows)\n",
+        "from caas_jupyter_tools import display_dataframe_to_user\n",
+        "display_dataframe_to_user(\"Comparación teoría vs PyTorch (rejilla)\", df)\n",
+        "df.head(10)  # para mostrar algo en la salida textual también\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "2038eafa",
+      "metadata": {
+        "id": "2038eafa"
+      },
+      "source": [
+        "\n",
+        "### 6.3. `padding='same'` y `padding='valid'`\n",
+        "\n",
+        "- `padding='valid'` equivale a `P=0`. La fórmula se reduce a: $\\;H_{\\text{out}} = \\lfloor (H_{\\text{in}} - K_h)/S_h \\rfloor + 1$.\n",
+        "- `padding='same'` intenta mantener $H_{\\text{out}}\\approx H_{\\text{in}}$ y $W_{\\text{out}}\\approx W_{\\text{in}}$ cuando `S=1`. Para `S>1`, se cumple la aproximación\n",
+        "$$\n",
+        "H_{\\text{out}} \\approx \\left\\lceil \\frac{H_{\\text{in}}}{S_h} \\right\\rceil,\\quad\n",
+        "W_{\\text{out}} \\approx \\left\\lceil \\frac{W_{\\text{in}}}{S_w} \\right\\rceil,\n",
+        "$$\n",
+        "según cómo PyTorch reparte el *padding*.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "4931296a",
+      "metadata": {
+        "id": "4931296a"
+      },
+      "outputs": [],
+      "source": [
+        "tests = [\n",
+        "    dict(H_in=31, W_in=35, K=(3,3), S=(1,1), padding='valid'),\n",
+        "    dict(H_in=31, W_in=35, K=(3,3), S=(1,1), padding='same'),\n",
+        "    dict(H_in=31, W_in=35, K=(5,5), S=(2,2), padding='same'),\n",
+        "]\n",
+        "\n",
+        "def out_hw_valid(H_in, W_in, K_h, K_w, S_h, S_w):\n",
+        "    H_out = math.floor((H_in - K_h)/S_h) + 1\n",
+        "    W_out = math.floor((W_in - K_w)/S_w) + 1\n",
+        "    return H_out, W_out\n",
+        "\n",
+        "for t in tests:\n",
+        "    H_in, W_in = t['H_in'], t['W_in']\n",
+        "    K_h, K_w = t['K']\n",
+        "    S_h, S_w = t['S']\n",
+        "    padding = t['padding']\n",
+        "    print(\"\\nCaso:\", t)\n",
+        "    if padding == 'valid':\n",
+        "        print(\"Teoría (valid) ->\", out_hw_valid(H_in, W_in, K_h, K_w, S_h, S_w))\n",
+        "    if TORCH_OK:\n",
+        "        x = torch.randn(1, 3, H_in, W_in)\n",
+        "        conv = nn.Conv2d(3, 4, (K_h, K_w), (S_h, S_w), padding=padding, bias=False)\n",
+        "        y = conv(x)\n",
+        "        print(\"PyTorch -> y.shape:\", tuple(y.shape))\n",
+        "    else:\n",
+        "        print(\"PyTorch no disponible.\")\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "68e9a4a0",
+      "metadata": {
+        "id": "68e9a4a0"
+      },
+      "source": [
+        "\n",
+        "### 6.4. Nota sobre mezcla de canales (`C_in=3`) y número de filtros (`C_out`)\n",
+        "\n",
+        "Cada filtro de `Conv2d` tiene dimensión $(C_{\\text{in}}, K_h, K_w)$. En una imagen RGB:\n",
+        "- Se multiplican y suman los 3 mapas de entrada con sus pesos por posición del *kernel* → 1 mapa de salida por filtro.\n",
+        "- Usar `C_out` filtros produce `C_out` mapas, por lo que la salida tiene forma $(N, C_{\\text{out}}, H_{\\text{out}}, W_{\\text{out}})$.\n",
+        "\n",
+        "Esto **no** cambia las fórmulas de $H_{\\text{out}}, W_{\\text{out}}$, pero sí el *número* de canales resultante.\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "0c906cf9",
+      "metadata": {
+        "id": "0c906cf9"
+      },
+      "source": [
+        "\n",
+        "### 6.5. Prueba aleatoria de consistencia\n",
+        "\n",
+        "Probamos `M` configuraciones aleatorias y verificamos que la fórmula coincida con PyTorch cuando la capa es válida (sin dimensiones negativas).\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "aaf3746d",
+      "metadata": {
+        "id": "aaf3746d"
+      },
+      "outputs": [],
+      "source": [
+        "import random\n",
+        "M = 20\n",
+        "ok_count = 0\n",
+        "checked = 0\n",
+        "\n",
+        "if TORCH_OK:\n",
+        "    for _ in range(M):\n",
+        "        H_in = random.randint(16, 64)\n",
+        "        W_in = random.randint(16, 64)\n",
+        "        C_in = 3\n",
+        "        C_out = random.choice([4, 8, 16])\n",
+        "        K_h = random.choice([1,3,5])\n",
+        "        K_w = random.choice([1,3,5])\n",
+        "        P_h = random.randint(0, 3)\n",
+        "        P_w = random.randint(0, 3)\n",
+        "        S_h = random.choice([1,2,3])\n",
+        "        S_w = random.choice([1,2,3])\n",
+        "        H_out_th, W_out_th = conv2d_out_hw(H_in, W_in, K_h, K_w, P_h, P_w, S_h, S_w)\n",
+        "        if H_out_th <= 0 or W_out_th <= 0:\n",
+        "            continue  # configuración inválida\n",
+        "        x = torch.randn(2, C_in, H_in, W_in)\n",
+        "        conv = nn.Conv2d(C_in, C_out, (K_h, K_w), (S_h, S_w), (P_h, P_w), bias=False)\n",
+        "        y = conv(x)\n",
+        "        ok = tuple(y.shape) == (2, C_out, H_out_th, W_out_th)\n",
+        "        ok_count += int(ok)\n",
+        "        checked += 1\n",
+        "\n",
+        "    print(f\"Probadas {checked} configuraciones válidas; coincidencias teoría==PyTorch: {ok_count}/{checked}\")\n",
+        "else:\n",
+        "    print(\"PyTorch no disponible; omitiendo prueba aleatoria.\")\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "d0b3a5bb",
+      "metadata": {
+        "id": "d0b3a5bb"
+      },
+      "source": [
+        "\n",
+        "## 7. Conclusiones\n",
+        "\n",
+        "- Para **convolución 2D** sin dilatación, las dimensiones espaciales de salida vienen dadas por:\n",
+        "\n",
+        "$$\n",
+        "H_{out} = \\left\\lfloor \\frac{H_{in} + 2P_h - K_h}{S_h} \\right\\rfloor + 1, \\quad\n",
+        "W_{out} = \\left\\lfloor \\frac{W_{in} + 2P_w - K_w}{S_w} \\right\\rfloor + 1.\n",
+        "$$\n",
+        "\n",
+        "- El número de canales de salida es `C_out`, determinado por la cantidad de filtros.\n",
+        "- `padding='valid'` ($P=0$) reduce el tamaño; `padding='same'` conserva tamaño para `S=1` y lo aproxima a `ceil(H_in/S)` y `ceil(W_in/S)` para `S>1`.\n",
+        "- Las pruebas con PyTorch muestran consistencia entre la **fórmula teórica** y la **implementación práctica**.\n"
+      ]
+    }
+  ],
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "include_colab_link": true
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}
